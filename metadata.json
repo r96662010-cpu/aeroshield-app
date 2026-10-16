@@ -1,0 +1,6 @@
+{
+  "name": "AeroShield - Real-Time Pollution Monitoring & Smart Route Bypass Platform",
+  "description": "Production-grade air quality intelligence and route bypass system. Features live AQI hotspot tracking, proactive bypass alerts, exposure-optimized navigation, and municipal command dashboard.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": []
+}

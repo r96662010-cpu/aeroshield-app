@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+  
+  .font-mono, .tabular-nums {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Custom Leaflet Dark / Crisp Map Overrides */
+.leaflet-container {
+  background: #0a0a0a !important;
+  font-family: 'Plus Jakarta Sans', sans-serif !important;
+}
+
+/* High-contrast dark filter for OpenStreetMap tiles (100% free, zero watermarks, zero API keys) */
+.dark-map-tiles .leaflet-tile-pane,
+.leaflet-container.dark-map-tiles .leaflet-tile-pane,
+.dark-map-tiles .leaflet-layer img.leaflet-tile {
+  filter: brightness(0.6) invert(1) contrast(2.6) hue-rotate(200deg) saturate(0.25) !important;
+}
+
+.leaflet-popup-content-wrapper {
+  background: #171717 !important;
+  color: #f5f5f5 !important;
+  border-radius: 10px !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6) !important;
+  padding: 0 !important;
+}
+
+.leaflet-popup-content {
+  margin: 12px 14px !important;
+  line-height: 1.4 !important;
+}
+
+.leaflet-popup-tip {
+  background: #171717 !important;
+}
+
+.leaflet-control-zoom a {
+  background-color: #171717 !important;
+  color: #e5e5e5 !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+.leaflet-control-zoom a:hover {
+  background-color: #262626 !important;
+}
+
+.leaflet-control-attribution {
+  background: rgba(10, 10, 10, 0.75) !important;
+  color: #737373 !important;
+  font-size: 10px !important;
+}
+
+.leaflet-control-attribution a {
+  color: #a3a3a3 !important;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
