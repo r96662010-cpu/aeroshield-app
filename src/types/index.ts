@@ -180,3 +180,13 @@ export interface SystemHealth {
   liveCommutersTracked: number;
   grapStage: 'Stage I (Moderate)' | 'Stage II (Very Poor)' | 'Stage III (Severe)' | 'Stage IV (Severe+)';
 }
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  picture?: string;
+  role: 'admin' | 'citizen';
+  clearanceLevel: string;
+  isChiefAdmin?: boolean;
+}

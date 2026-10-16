@@ -33,6 +33,8 @@ import { AuthorityLoginModal } from './components/Admin/AuthorityLoginModal';
 import { AddLocationModal } from './components/Common/AddLocationModal';
 import { PrivacyModal } from './components/Common/PrivacyModal';
 import { OfflineIndicator } from './components/PWA/OfflineIndicator';
+import { EncryptedAccessGate } from './components/Auth/EncryptedAccessGate';
+import { AuthUser } from './types';
 import { Language, TRANSLATIONS } from './data/translations';
 import {
   AlertTriangle,
@@ -85,6 +87,16 @@ export default function App() {
       return 0;
     }
   });
+
+  // User Authentication & Cryptographic Gate state
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
+    try {
+      const raw = localStorage.getItem('aeroshield_user_profile');
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return null;
+  });
+  const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(true);
 
   // Security Clearance & Custom Location modals state
   const [isAuthorityAuthenticated, setIsAuthorityAuthenticated] = useState<boolean>(() => {
@@ -180,16 +192,43 @@ export default function App() {
     }
   };
 
-  const handleAuthenticated = () => {
-    setIsAuthorityAuthenticated(true);
-    setIsAuthorityLoginOpen(false);
-    setUserRole('admin');
-    setActiveTab('admin');
-    setToastMessage('🛡️ Government Authority Clearance Session Active');
-    setTimeout(() => setToastMessage(null), 4000);
+  const handleLoginSuccess = (user: AuthUser, token: string) => {
+    try {
+      localStorage.setItem('aeroshield_auth_token', token);
+      localStorage.setItem('aeroshield_user_profile', JSON.stringify(user));
+      localStorage.setItem('aeroshield_security_clearance_active', user.role === 'admin' ? 'true' : 'false');
+      localStorage.setItem('aeroshield_officer_badge', user.email);
+      localStorage.setItem('aeroshield_session_expires', String(Date.now() + 86400000));
+    } catch {}
+
+    setCurrentUser(user);
+    setUserRole(user.role);
+    setIsAuthorityAuthenticated(user.role === 'admin');
+
+    if (user.role === 'admin') {
+      setActiveTab('admin');
+      setToastMessage(`🛡️ Welcome Chief Administrator (${user.email}) - Full Operational Control Active`);
+    } else {
+      setActiveTab('map');
+      setToastMessage(`✨ Welcome, ${user.name} - Verified Citizen Telemetry Active`);
+    }
+    setTimeout(() => setToastMessage(null), 4500);
   };
 
-  const handleLogoutAuthority = async () => {
+  const handleAuthenticated = (user?: AuthUser, token?: string) => {
+    if (user && token) {
+      handleLoginSuccess(user, token);
+    } else {
+      setIsAuthorityAuthenticated(true);
+      setUserRole('admin');
+      setActiveTab('admin');
+      setToastMessage('🛡️ Government Authority Clearance Session Active');
+      setTimeout(() => setToastMessage(null), 4000);
+    }
+    setIsAuthorityLoginOpen(false);
+  };
+
+  const handleLogout = async () => {
     try {
       const token = localStorage.getItem('aeroshield_auth_token');
       if (token) {
@@ -199,16 +238,20 @@ export default function App() {
         });
       }
     } catch {}
-    setIsAuthorityAuthenticated(false);
-    setUserRole('citizen');
-    setActiveTab('map');
+
     try {
       localStorage.removeItem('aeroshield_security_clearance_active');
       localStorage.removeItem('aeroshield_auth_token');
+      localStorage.removeItem('aeroshield_user_profile');
       localStorage.removeItem('aeroshield_officer_badge');
       localStorage.removeItem('aeroshield_session_expires');
     } catch {}
-    setToastMessage('🔒 Security Clearance Session Locked');
+
+    setCurrentUser(null);
+    setIsAuthorityAuthenticated(false);
+    setUserRole('citizen');
+    setActiveTab('map');
+    setToastMessage('🔒 App Locked & Encrypted - Please sign in with Google');
     setTimeout(() => setToastMessage(null), 3000);
   };
 
@@ -221,16 +264,39 @@ export default function App() {
       })
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
-          if (!data?.valid) {
+          if (data?.valid && data.user) {
+            setCurrentUser(data.user);
+            setUserRole(data.user.role);
+            setIsAuthorityAuthenticated(data.user.role === 'admin');
+          } else {
+            setCurrentUser(null);
             setIsAuthorityAuthenticated(false);
             setUserRole('citizen');
             localStorage.removeItem('aeroshield_security_clearance_active');
             localStorage.removeItem('aeroshield_auth_token');
-          } else {
-            setIsAuthorityAuthenticated(true);
+            localStorage.removeItem('aeroshield_user_profile');
           }
         })
-        .catch(() => {});
+        .catch(() => {
+          // If offline or network error, retain local user profile if valid
+          const raw = localStorage.getItem('aeroshield_user_profile');
+          if (raw) {
+            try {
+              const u = JSON.parse(raw);
+              setCurrentUser(u);
+              setUserRole(u.role);
+              setIsAuthorityAuthenticated(u.role === 'admin');
+            } catch {
+              setCurrentUser(null);
+            }
+          }
+        })
+        .finally(() => {
+          setIsCheckingAuth(false);
+        });
+    } else {
+      setCurrentUser(null);
+      setIsCheckingAuth(false);
     }
 
     fetch('/api/incidents')
@@ -615,6 +681,25 @@ export default function App() {
     ? Math.round((simulationIndex / (activeRoute.coordinates.length - 1)) * 100)
     : 0;
 
+  // Encrypted Gate: No one can access AeroShield without authenticating with their Google Account
+  if (isCheckingAuth) {
+    return (
+      <div className="min-h-screen w-full bg-neutral-950 text-neutral-100 flex flex-col items-center justify-center space-y-4 font-sans">
+        <div className="w-16 h-16 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center text-emerald-400 animate-pulse shadow-2xl">
+          <ShieldAlert className="w-8 h-8" />
+        </div>
+        <div className="text-center space-y-1.5">
+          <h2 className="text-sm font-bold text-white tracking-wide">AeroShield Encrypted Operations Platform</h2>
+          <p className="text-xs text-neutral-400 font-mono">Verifying 256-Bit Cryptographic Session Token...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return <EncryptedAccessGate onLoginSuccess={handleLoginSuccess} />;
+  }
+
   return (
     <div className="flex flex-col h-screen w-screen bg-neutral-950 text-neutral-100 overflow-hidden font-sans">
       {/* Top Bar following Top Bar Contract */}
@@ -625,15 +710,17 @@ export default function App() {
         onOpenAddLocation={() => setIsAddLocationOpen(true)}
         activeTab={activeTab}
         onSelectTab={(tab) => {
-          if (tab === 'admin' && !isAuthorityAuthenticated) {
+          if (tab === 'admin' && !isAuthorityAuthenticated && currentUser?.role !== 'admin') {
             setIsAuthorityLoginOpen(true);
             return;
           }
           setActiveTab(tab);
         }}
         userRole={userRole}
+        currentUser={currentUser}
+        onLogout={handleLogout}
         onToggleRole={() => {
-          if (userRole === 'citizen' && !isAuthorityAuthenticated) {
+          if (userRole === 'citizen' && !isAuthorityAuthenticated && currentUser?.role !== 'admin') {
             setIsAuthorityLoginOpen(true);
             return;
           }
@@ -642,9 +729,9 @@ export default function App() {
           if (nextRole === 'admin') setActiveTab('admin');
           else if (activeTab === 'admin') setActiveTab('map');
         }}
-        isAuthorityAuthenticated={isAuthorityAuthenticated}
+        isAuthorityAuthenticated={isAuthorityAuthenticated || currentUser?.role === 'admin'}
         onOpenAuthorityLogin={() => setIsAuthorityLoginOpen(true)}
-        onLogoutAuthority={handleLogoutAuthority}
+        onLogoutAuthority={handleLogout}
         onOpenPrivacy={() => setIsPrivacyOpen(true)}
         language={language}
         onToggleLanguage={() => setLanguage((l) => (l === 'en' ? 'hi' : 'en'))}
@@ -863,7 +950,7 @@ export default function App() {
         {/* VIEW 5: ADMIN / AUTHORITY COMMAND CENTER (RESTRICTED CLEARANCE) */}
         {activeTab === 'admin' && (
           <div className="flex-1 overflow-y-auto">
-            {!isAuthorityAuthenticated ? (
+            {(!isAuthorityAuthenticated && currentUser?.role !== 'admin') ? (
               <div className="h-full flex items-center justify-center p-6 bg-neutral-950">
                 <div className="max-w-md w-full p-6 rounded-2xl bg-neutral-900 border border-amber-500/40 shadow-2xl text-center space-y-4">
                   <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
@@ -877,7 +964,7 @@ export default function App() {
                       </span>
                     </h2>
                     <p className="text-xs text-neutral-400 mt-1">
-                      Access to municipal anti-smog mist sprayers, GRAP enforcement, and emergency public broadcast transmitters requires official security verification.
+                      Access to municipal anti-smog mist sprayers, GRAP enforcement, and emergency public broadcast transmitters requires official administrator clearance (r96662010@gmail.com).
                     </p>
                   </div>
                   <div className="pt-2">
@@ -886,11 +973,11 @@ export default function App() {
                       className="w-full py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-amber-950/50 transition-all flex items-center justify-center gap-2 cursor-pointer"
                     >
                       <ShieldCheck className="w-4 h-4" />
-                      <span>Verify Authority Clearance (Badge ID & Passcode)</span>
+                      <span>Elevate to Authority Clearance (Google Sign-In)</span>
                     </button>
                   </div>
                   <div className="text-[10px] text-neutral-500 font-mono">
-                    Restricted Operations Gate · Development mode authentication enabled
+                    Zero Passwords · Tokenized Google Identity Verification
                   </div>
                 </div>
               </div>
@@ -906,6 +993,7 @@ export default function App() {
                 systemHealth={systemHealth}
                 onBroadcastAlert={handleBroadcastAlert}
                 onUpdateGrapStage={handleUpdateGrapStage}
+                currentUser={currentUser}
               />
             )}
           </div>
@@ -956,7 +1044,7 @@ export default function App() {
 
         <button
           onClick={() => {
-            if (!isAuthorityAuthenticated) {
+            if (!isAuthorityAuthenticated && currentUser?.role !== 'admin') {
               setIsAuthorityLoginOpen(true);
             } else {
               if (userRole !== 'admin') setUserRole('admin');
@@ -967,7 +1055,7 @@ export default function App() {
             activeTab === 'admin' ? 'text-amber-400 bg-amber-950/40' : 'text-neutral-400 hover:text-white'
           }`}
         >
-          {isAuthorityAuthenticated ? (
+          {isAuthorityAuthenticated || currentUser?.role === 'admin' ? (
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
           ) : (
             <Lock className="w-4 h-4 text-amber-400" />

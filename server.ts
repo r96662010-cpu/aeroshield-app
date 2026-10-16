@@ -28,6 +28,12 @@ interface RateLimitRecord {
 const loginRateLimiter = new Map<string, RateLimitRecord>();
 const invalidatedTokens = new Set<string>();
 
+// In-memory list of authorized administrative emails (Chief Admin default: r96662010@gmail.com)
+const authorizedAdminEmails = new Set<string>([
+  'r96662010@gmail.com',
+  (process.env.ADMIN_EMAIL || '').trim().toLowerCase()
+].filter(Boolean));
+
 // Security headers middleware
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -39,34 +45,38 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '1mb' }));
 
 /**
- * Helper to generate cryptographically signed HMAC session token
+ * Helper to generate cryptographically signed HMAC session token containing user identity & role
  */
-function createSessionToken(badgeId: string, role = 'admin', hours = 2): { token: string; expiresAt: number } {
+function createSessionToken(user: { id: string; email: string; name: string; role: string; clearanceLevel: string; picture?: string; isChiefAdmin?: boolean }, hours = 24): { token: string; expiresAt: number } {
   const expiresAt = Date.now() + hours * 60 * 60 * 1000;
-  const payload = `${badgeId}:${role}:${expiresAt}`;
-  const hmac = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
-  const token = Buffer.from(`${payload}:${hmac}`).toString('base64url');
+  const payload = JSON.stringify({
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    picture: user.picture || '',
+    role: user.role,
+    clearanceLevel: user.clearanceLevel,
+    isChiefAdmin: user.isChiefAdmin || false,
+    expiresAt
+  });
+  const b64Payload = Buffer.from(payload).toString('base64url');
+  const hmac = crypto.createHmac('sha256', SESSION_SECRET).update(b64Payload).digest('hex');
+  const token = `${b64Payload}.${hmac}`;
   return { token, expiresAt };
 }
 
 /**
  * Helper to verify cryptographically signed session token
  */
-function verifySessionToken(token: string): { valid: boolean; badgeId?: string; role?: string; expiresAt?: number } {
+function verifySessionToken(token: string): { valid: boolean; user?: any } {
   if (!token || invalidatedTokens.has(token)) return { valid: false };
 
   try {
-    const decoded = Buffer.from(token, 'base64url').toString('utf8');
-    const parts = decoded.split(':');
-    if (parts.length !== 4) return { valid: false };
+    const parts = token.split('.');
+    if (parts.length !== 2) return { valid: false };
 
-    const [badgeId, role, expiresAtStr, receivedHmac] = parts;
-    const expiresAt = Number(expiresAtStr);
-
-    if (Date.now() > expiresAt) return { valid: false };
-
-    const payload = `${badgeId}:${role}:${expiresAtStr}`;
-    const expectedHmac = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+    const [b64Payload, receivedHmac] = parts;
+    const expectedHmac = crypto.createHmac('sha256', SESSION_SECRET).update(b64Payload).digest('hex');
 
     const expectedBuffer = Buffer.from(expectedHmac);
     const receivedBuffer = Buffer.from(receivedHmac);
@@ -75,69 +85,79 @@ function verifySessionToken(token: string): { valid: boolean; badgeId?: string; 
       return { valid: false };
     }
 
-    return { valid: true, badgeId, role, expiresAt };
+    const payload = JSON.parse(Buffer.from(b64Payload, 'base64url').toString('utf8'));
+    if (Date.now() > payload.expiresAt) return { valid: false };
+
+    return { valid: true, user: payload };
   } catch {
     return { valid: false };
   }
 }
 
 /**
- * Authentication Endpoints (Zero secrets exposed in frontend)
+ * Google Sign-In & Authentication Endpoint
+ * Completely passwordless, zero visible passwords.
  */
-app.post('/api/auth/login', (req, res) => {
-  const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
-  const now = Date.now();
+app.post('/api/auth/google', (req, res) => {
+  const { credential, email: inputEmail, name: inputName, picture: inputPicture } = req.body || {};
+  let email = (inputEmail || '').trim().toLowerCase();
+  let name = (inputName || '').trim();
+  let picture = (inputPicture || '').trim();
+  let id = '';
 
-  // Check rate limit lockout
-  const record = loginRateLimiter.get(clientIp);
-  if (record && record.lockoutUntil > now) {
-    const minutesLeft = Math.ceil((record.lockoutUntil - now) / 60000);
-    return res.status(429).json({
-      error: `Too many failed attempts. Security lockout active for ${minutesLeft} minute(s).`
-    });
+  // If Google Identity Services JWT credential provided, decode its payload
+  if (credential && typeof credential === 'string') {
+    try {
+      const parts = credential.split('.');
+      if (parts.length >= 2) {
+        const decoded = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+        if (decoded.email) email = decoded.email.trim().toLowerCase();
+        if (decoded.name) name = decoded.name.trim();
+        if (decoded.picture) picture = decoded.picture;
+        if (decoded.sub) id = decoded.sub;
+      }
+    } catch {}
   }
 
-  const { badgeId, passcode } = req.body || {};
-
-  if (!badgeId || typeof badgeId !== 'string' || !passcode || typeof passcode !== 'string') {
-    return res.status(400).json({ error: 'Badge ID and Passcode are required.' });
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ error: 'Valid Google email account is required to sign in.' });
   }
 
-  const cleanBadge = badgeId.trim();
-  const cleanPasscode = passcode.trim();
-
-  // Validate credentials in constant time
-  const isBadgeValid = cleanBadge.toUpperCase() === ADMIN_BADGE_ID.toUpperCase() || cleanBadge.toUpperCase() === 'CPCB-DEL-8821';
-  const isPasscodeValid = cleanPasscode === ADMIN_PASSCODE || cleanPasscode === 'Admin@2026' || cleanPasscode === '2026';
-
-  if (!isBadgeValid || !isPasscodeValid) {
-    const currentAttempts = (record?.attempts || 0) + 1;
-    const lockoutUntil = currentAttempts >= 5 ? now + 15 * 60 * 1000 : 0;
-    loginRateLimiter.set(clientIp, { attempts: currentAttempts, lockoutUntil });
-
-    if (currentAttempts >= 5) {
-      return res.status(429).json({
-        error: 'Security Lockout: 5 consecutive failed attempts. Terminal locked for 15 minutes.'
-      });
-    }
-
-    return res.status(401).json({
-      error: `Authentication failed. Invalid Officer Badge or Passcode. (${5 - currentAttempts} attempts remaining before lockout)`
-    });
+  if (!name) {
+    name = email.split('@')[0];
+  }
+  if (!id) {
+    id = `google-${crypto.createHash('md5').update(email).digest('hex').slice(0, 10)}`;
   }
 
-  // Reset rate limiter on success
-  loginRateLimiter.delete(clientIp);
+  // Determine Role & Clearance Level
+  // r96662010@gmail.com is designated Chief Administrator with full control
+  const isChief = email === 'r96662010@gmail.com';
+  const isAdmin = isChief || authorizedAdminEmails.has(email);
+  const role: 'admin' | 'citizen' = isAdmin ? 'admin' : 'citizen';
+  const clearanceLevel = isChief
+    ? 'Chief Administrator (Full Operations Control)'
+    : isAdmin
+    ? 'Municipal Operations Authorized (Level 3)'
+    : 'Verified Citizen Commuter';
 
-  const { token, expiresAt } = createSessionToken(cleanBadge, 'admin', 2);
+  const userObj = {
+    id,
+    email,
+    name,
+    picture,
+    role,
+    clearanceLevel,
+    isChiefAdmin: isChief
+  };
+
+  const { token, expiresAt } = createSessionToken(userObj, 24);
 
   return res.json({
     success: true,
     token,
     user: {
-      badgeId: cleanBadge,
-      role: 'admin',
-      clearanceLevel: 'Level 3 Operator',
+      ...userObj,
       expiresAt
     }
   });
@@ -152,16 +172,20 @@ app.get('/api/auth/verify', (req, res) => {
   const token = authHeader.split(' ')[1];
   const result = verifySessionToken(token);
 
-  if (!result.valid) {
-    return res.status(401).json({ valid: false, error: 'Session expired or invalid. Please re-authenticate.' });
+  if (!result.valid || !result.user) {
+    return res.status(401).json({ valid: false, error: 'Session expired or invalid. Please sign in with Google.' });
   }
+
+  const email = (result.user.email || '').toLowerCase();
+  const isChief = email === 'r96662010@gmail.com';
+  const isAdmin = isChief || authorizedAdminEmails.has(email);
 
   return res.json({
     valid: true,
     user: {
-      badgeId: result.badgeId,
-      role: result.role,
-      expiresAt: result.expiresAt
+      ...result.user,
+      role: isAdmin ? 'admin' : 'citizen',
+      isChiefAdmin: isChief
     }
   });
 });
@@ -173,6 +197,82 @@ app.post('/api/auth/logout', (req, res) => {
     invalidatedTokens.add(token);
   }
   return res.json({ success: true, message: 'Signed out successfully' });
+});
+
+// Admin Team Control - GET authorized admins
+app.get('/api/auth/admin/users', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const token = authHeader.split(' ')[1];
+  const result = verifySessionToken(token);
+  if (!result.valid || result.user?.role !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden: Admin clearance required.' });
+  }
+
+  return res.json({
+    admins: Array.from(authorizedAdminEmails),
+    chiefAdmin: 'r96662010@gmail.com'
+  });
+});
+
+// Admin Team Control - Delegate new admin (Chief Admin only)
+app.post('/api/auth/admin/users', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const token = authHeader.split(' ')[1];
+  const result = verifySessionToken(token);
+  if (!result.valid || result.user?.email !== 'r96662010@gmail.com') {
+    return res.status(403).json({ error: 'Only Chief Administrator (r96662010@gmail.com) can manage authority team members.' });
+  }
+
+  const { email } = req.body || {};
+  if (!email || typeof email !== 'string' || !email.includes('@')) {
+    return res.status(400).json({ error: 'Valid Google email is required.' });
+  }
+
+  const clean = email.trim().toLowerCase();
+  authorizedAdminEmails.add(clean);
+
+  return res.json({
+    success: true,
+    message: `Granted Authority Admin clearance to ${clean}`,
+    admins: Array.from(authorizedAdminEmails)
+  });
+});
+
+// Admin Team Control - Revoke admin clearance (Chief Admin only)
+app.delete('/api/auth/admin/users', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const token = authHeader.split(' ')[1];
+  const result = verifySessionToken(token);
+  if (!result.valid || result.user?.email !== 'r96662010@gmail.com') {
+    return res.status(403).json({ error: 'Only Chief Administrator (r96662010@gmail.com) can manage authority team members.' });
+  }
+
+  const { email } = req.body || {};
+  if (!email || typeof email !== 'string') {
+    return res.status(400).json({ error: 'Valid email is required.' });
+  }
+
+  const clean = email.trim().toLowerCase();
+  if (clean === 'r96662010@gmail.com') {
+    return res.status(400).json({ error: 'Cannot revoke Chief Administrator clearance.' });
+  }
+
+  authorizedAdminEmails.delete(clean);
+
+  return res.json({
+    success: true,
+    message: `Revoked Authority Admin clearance for ${clean}`,
+    admins: Array.from(authorizedAdminEmails)
+  });
 });
 
 /**

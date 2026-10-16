@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   CityConfig,
   HotspotZone,
@@ -27,8 +27,13 @@ import {
   UserCheck,
   Sparkles,
   Loader2,
-  ArrowRight
+  ArrowRight,
+  Users,
+  UserPlus,
+  Trash2,
+  ShieldCheck
 } from 'lucide-react';
+import { AuthUser } from '../../types';
 
 interface AdminCommandCenterProps {
   city: CityConfig;
@@ -41,6 +46,7 @@ interface AdminCommandCenterProps {
   systemHealth: SystemHealth;
   onBroadcastAlert: (notification: BroadcastNotification) => void;
   onUpdateGrapStage: (stage: SystemHealth['grapStage']) => void;
+  currentUser?: AuthUser | null;
 }
 
 export const AdminCommandCenter: React.FC<AdminCommandCenterProps> = ({
@@ -53,12 +59,90 @@ export const AdminCommandCenter: React.FC<AdminCommandCenterProps> = ({
   auditLogs,
   systemHealth,
   onBroadcastAlert,
-  onUpdateGrapStage
+  onUpdateGrapStage,
+  currentUser
 }) => {
   const t = TRANSLATIONS[language];
   const [activeAdminSubTab, setActiveAdminSubTab] = useState<
-    'overview' | 'hotspots' | 'incidents' | 'broadcast' | 'audit' | 'grap'
+    'overview' | 'incidents' | 'broadcast' | 'audit' | 'team'
   >('overview');
+
+  // Admin Team Delegation State
+  const [adminTeam, setAdminTeam] = useState<string[]>(['r96662010@gmail.com']);
+  const [newAdminEmail, setNewAdminEmail] = useState('');
+  const [teamMessage, setTeamMessage] = useState<{ text: string; isError?: boolean } | null>(null);
+  const [isTeamLoading, setIsTeamLoading] = useState(false);
+
+  // Fetch Admin Team on mount
+  useEffect(() => {
+    const token = localStorage.getItem('aeroshield_auth_token');
+    if (!token) return;
+    fetch('/api/auth/admin/users', {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.admins && Array.isArray(data.admins)) {
+          setAdminTeam(data.admins);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleAddAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newAdminEmail.trim() || !newAdminEmail.includes('@')) {
+      setTeamMessage({ text: 'Please enter a valid Google email.', isError: true });
+      return;
+    }
+    setIsTeamLoading(true);
+    setTeamMessage(null);
+    try {
+      const token = localStorage.getItem('aeroshield_auth_token');
+      const res = await fetch('/api/auth/admin/users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ email: newAdminEmail.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to add admin user');
+      setAdminTeam(data.admins || [...adminTeam, newAdminEmail.trim().toLowerCase()]);
+      setNewAdminEmail('');
+      setTeamMessage({ text: `Clearance successfully delegated to ${newAdminEmail.trim().toLowerCase()}` });
+    } catch (err: any) {
+      setTeamMessage({ text: err.message, isError: true });
+    } finally {
+      setIsTeamLoading(false);
+    }
+  };
+
+  const handleRevokeAdmin = async (email: string) => {
+    if (email === 'r96662010@gmail.com') return;
+    setIsTeamLoading(true);
+    setTeamMessage(null);
+    try {
+      const token = localStorage.getItem('aeroshield_auth_token');
+      const res = await fetch('/api/auth/admin/users', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to revoke admin user');
+      setAdminTeam(data.admins || adminTeam.filter((a) => a !== email));
+      setTeamMessage({ text: `Revoked clearance for ${email}` });
+    } catch (err: any) {
+      setTeamMessage({ text: err.message, isError: true });
+    } finally {
+      setIsTeamLoading(false);
+    }
+  };
 
   // Broadcast state
   const [broadcastTitle, setBroadcastTitle] = useState('GRAP Stage Implementation Notice');
@@ -131,12 +215,15 @@ export const AdminCommandCenter: React.FC<AdminCommandCenterProps> = ({
             {city.name} Air Quality & Traffic Diversion Console
           </h1>
           <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-400">
-            <span>Jurisdiction: Municipal Environmental Operations</span>
+            <span>Jurisdiction: Central Pollution Control Board (CPCB)</span>
             <span aria-hidden="true">·</span>
-            <span>Role: Environmental Operations Terminal</span>
+            <span>
+              Officer: <strong className="text-white">{currentUser?.name || 'Chief Administrator'}</strong> ({currentUser?.email || 'r96662010@gmail.com'})
+            </span>
             <span aria-hidden="true">·</span>
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/80 border border-amber-500/40 text-amber-300">
-              Demo / Development Session
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 font-semibold flex items-center gap-1">
+              <ShieldCheck className="w-3 h-3 text-emerald-400" />
+              <span>Full Operational Control Active</span>
             </span>
           </div>
         </div>
@@ -246,6 +333,17 @@ export const AdminCommandCenter: React.FC<AdminCommandCenterProps> = ({
           }`}
         >
           Compliance & Audit Logs
+        </button>
+        <button
+          onClick={() => setActiveAdminSubTab('team')}
+          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+            activeAdminSubTab === 'team'
+              ? 'bg-neutral-800 text-white shadow-sm'
+              : 'text-neutral-400 hover:text-white'
+          }`}
+        >
+          <Users className="w-3.5 h-3.5" />
+          <span>Authority Team ({adminTeam.length})</span>
         </button>
       </div>
 
@@ -597,6 +695,125 @@ export const AdminCommandCenter: React.FC<AdminCommandCenterProps> = ({
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Subtab 5: Authority Team & Delegation */}
+      {activeAdminSubTab === 'team' && (
+        <div className="space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h2 className="text-base font-bold text-white tracking-tight flex items-center gap-2">
+                <Users className="w-4 h-4 text-amber-400" />
+                <span>Authority Admin Team & Access Control</span>
+              </h2>
+              <p className="text-xs text-neutral-400 mt-0.5">
+                Manage authorized municipal administrative accounts. All admins sign in via Google with zero passwords.
+              </p>
+            </div>
+            <div className="text-[11px] font-mono text-emerald-400 px-2.5 py-1 rounded bg-emerald-950/60 border border-emerald-500/30">
+              Chief Admin: r96662010@gmail.com
+            </div>
+          </div>
+
+          {teamMessage && (
+            <div
+              className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
+                teamMessage.isError
+                  ? 'bg-rose-950/70 border border-rose-500/40 text-rose-300'
+                  : 'bg-emerald-950/70 border border-emerald-500/40 text-emerald-300'
+              }`}
+            >
+              <CheckCircle className="w-4 h-4 shrink-0" />
+              <span>{teamMessage.text}</span>
+            </div>
+          )}
+
+          {/* Delegate New Admin Form */}
+          <div className="p-4 rounded-xl bg-neutral-900 border border-neutral-800 space-y-3">
+            <h3 className="text-xs font-bold text-white flex items-center gap-2">
+              <UserPlus className="w-3.5 h-3.5 text-amber-400" />
+              <span>Delegate Municipal Operations Clearance</span>
+            </h3>
+            <p className="text-[11px] text-neutral-400">
+              Grant environmental emergency response, anti-smog equipment dispatch, and alert broadcast authority to an authorized Google account.
+            </p>
+
+            <form onSubmit={handleAddAdmin} className="flex flex-col sm:flex-row gap-2 pt-1">
+              <input
+                type="email"
+                value={newAdminEmail}
+                onChange={(e) => setNewAdminEmail(e.target.value)}
+                placeholder="officer.email@gmail.com"
+                className="flex-1 bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-amber-500 font-mono"
+                required
+              />
+              <button
+                type="submit"
+                disabled={isTeamLoading}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-xs rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                {isTeamLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserPlus className="w-3.5 h-3.5" />}
+                <span>Authorize Google Account</span>
+              </button>
+            </form>
+          </div>
+
+          {/* Roster of Authorized Administrators */}
+          <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 bg-neutral-950 border-b border-neutral-800 text-xs font-bold text-white flex items-center justify-between">
+              <span>Authorized Authority Google Accounts</span>
+              <span className="font-mono text-[10px] text-neutral-400">{adminTeam.length} Active Cleared</span>
+            </div>
+            <div className="divide-y divide-neutral-800/80">
+              {adminTeam.map((email) => {
+                const isChief = email.toLowerCase() === 'r96662010@gmail.com';
+                return (
+                  <div key={email} className="p-3.5 flex items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center gap-2.5">
+                      <div
+                        className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${
+                          isChief
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                            : 'bg-neutral-800 text-neutral-300 border border-neutral-700'
+                        }`}
+                      >
+                        {email.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-white font-mono">{email}</span>
+                          {isChief ? (
+                            <span className="text-[9px] font-mono px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500/40">
+                              Chief Administrator (Root)
+                            </span>
+                          ) : (
+                            <span className="text-[9px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40">
+                              Operations Officer
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-neutral-500 block">
+                          Full Anti-Smog Cannon & Alert Broadcast Controls Granted
+                        </span>
+                      </div>
+                    </div>
+
+                    {!isChief && (
+                      <button
+                        onClick={() => handleRevokeAdmin(email)}
+                        disabled={isTeamLoading}
+                        title="Revoke Admin Clearance"
+                        className="p-1.5 text-neutral-400 hover:text-rose-400 hover:bg-neutral-800 rounded-md transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
