@@ -262,7 +262,18 @@ export default function App() {
       fetch('/api/auth/verify', {
         headers: { Authorization: `Bearer ${token}` }
       })
-        .then((res) => (res.ok ? res.json() : null))
+        .then((res) => {
+          if (res.status === 404) {
+            // Netlify or static host: retain stored session
+            const raw = localStorage.getItem('aeroshield_user_profile');
+            if (raw) {
+              try {
+                return { valid: true, user: JSON.parse(raw) };
+              } catch {}
+            }
+          }
+          return res.ok ? res.json() : null;
+        })
         .then((data) => {
           if (data?.valid && data.user) {
             setCurrentUser(data.user);
