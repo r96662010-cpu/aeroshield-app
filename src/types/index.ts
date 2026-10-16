@@ -189,4 +189,5 @@ export interface AuthUser {
   role: 'admin' | 'citizen';
   clearanceLevel: string;
   isChiefAdmin?: boolean;
+  isDeveloper?: boolean;
 }
